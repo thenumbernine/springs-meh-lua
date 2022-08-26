@@ -5,23 +5,36 @@ local sdl = require 'ffi.sdl'
 local ig = require 'imgui'
 local vec2f = require 'vec-ffi.vec2f'
 
-_G.count = 10
-_G.dt = .1
-_G.gravForceEnabled = true
+_G.count = 50
+_G.initRadius = 70
+_G.initVelScale = .001
 
--- units: m^3 / (kg s^2)
-_G.gravForceConst = 1
+_G.dt = 1
+
+-- ye ol classic
+_G.gravForceEnabled = true
+_G.gravForceConst = .001	-- units: m^3 / (kg s^2)
 
 -- dumb
 _G.doubleCurlForceEnabled = false
-_G.doubleCurlForceConst = 1	-- units: m^3 / (kg s^2)
+_G.doubleCurlForceConst = .01	-- units: m^3 / (kg s^2)
 
 -- dumb
 _G.tripleCurlForceEnabled = false
 _G.tripleCurlForceConst = .000001
 
-_G.outerWallRadius = 100
-_G.outerWallRestitution = .5
+_G.springsEnabled = true
+_G.springStickDistance = 5
+_G.springRestLength = 5
+_G.springBreakDistance = 2
+_G.springForceConst = 3e-3
+_G.springVelDamping = 1e-2
+
+-- meh useful
+_G.outerWallRadius = 150
+_G.outerWallRestitution = 1
+
+_G.velDecay = 1	-- 1 - 1e-6
 
 -- 1D cross: cross(v)^i = ε^ij v_j
 local function left(v)
@@ -31,6 +44,13 @@ end
 -- 1D dot cross , i.e. volume: volume(a,b) = ε^ij a_i b_j
 local function determinant(a, b)
 	return a.x * b.y - a.y * b.x
+end
+
+local Spring = class()
+
+function Spring:init(a,b)
+	self[1] = a
+	self[2] = b
 end
 
 local Object = class()
@@ -89,14 +109,18 @@ function App:reset()
 	self.objs = table()
 	for i=1,count do
 		local th = math.random() * 2 * math.pi
-		local r = 1000 * math.random()
-		r = math.sqrt(r)
-		self.objs:insert(Object{
-			pos = vec2f(r * math.cos(th), r * math.sin(th)),
+		local r = math.sqrt(math.random()) * initRadius
+		local x0 = vec2f(r * math.cos(th), r * math.sin(th))
+		local o = Object{
+			pos = x0,
+			vel = left(x0) * initVelScale,
 			angle = math.random() * 2 * math.pi,
 			scale = math.random() + .5,
-		})
+		}
+		self.objs:insert(o)
+		o.index = #self.objs
 	end
+	self.springs = {}	-- maps (o1.index-1) + #objs * (o2.index-1) to a spring
 end
 
 local quadvtxs = table{
@@ -117,6 +141,7 @@ function App:update(...)
 		for i,o in ipairs(self.objs) do
 			o.force:set(0,0)
 			o.gravPotEnergy = 0
+			o.springPotEnergy = 0
 		end
 		-- [[ object-object-object forces
 		if tripleCurlForceEnabled then
@@ -132,7 +157,6 @@ function App:update(...)
 						local dij = oj.pos - oi.pos
 						local djk = ok.pos - oj.pos
 						local vol = determinant(dij, djk)
-	print('vol', vol)
 						-- determine axis of rotation between the three
 						local d0i = oi.pos - com
 						local d0j = oj.pos - com
@@ -168,11 +192,22 @@ function App:update(...)
 						oi.force = oi.force + force		-- kg m / s^2
 						oj.force = oj.force - force		-- kg m / s^2
 					end
+					-- while we're here .. sum up potential gravitational force
+					-- TODO why isn't it conservative?  
+					oi.gravPotEnergy = oi.gravPotEnergy - gravForceConst * massProd * invLen	-- units: kg m^2 / s^2
+					oj.gravPotEnergy = oj.gravPotEnergy - gravForceConst * massProd * invLen
 				end
-				-- while we're here .. sum up potential gravitational force
-				-- TODO why isn't it conservative?  
-				oi.gravPotEnergy = oi.gravPotEnergy - gravForceConst * massProd * invLen	-- units: kg m^2 / s^2
-				oj.gravPotEnergy = oj.gravPotEnergy - gravForceConst * massProd * invLen
+				if springsEnabled then
+					if len < oi.scale + oj.scale + springStickDistance then
+						local springIndex = oi.index-1 + #self.objs * (oj.index-1)
+						if not self.springs[springIndex] then
+							self.springs[springIndex] = Spring(oi, oj)
+						end
+					elseif math.abs(len - springRestLength) > springBreakDistance then
+						local springIndex = oi.index-1 + #self.objs * (oj.index-1)
+						self.springs[springIndex] = nil
+					end
+				end
 				
 				if doubleCurlForceEnabled then
 					if len > oi.scale + oj.scale then
@@ -184,26 +219,53 @@ function App:update(...)
 				end
 			end
 		end
+		-- spring forces (object-object)
+		if springsEnabled then
+			for _,s in pairs(self.springs) do
+				local oi, oj = s[1], s[2]
+				local delta = oj.pos - oi.pos
+				local len = delta:length()
+				local avgVel = (oi.vel + oj.vel) * .5
+--print('len', len)
+--print('springRestLength', springRestLength)
+				local offsetFromRest = springRestLength - len
+--print('offsetFromRest', offsetFromRest)
+				local forcemag = springForceConst * offsetFromRest / len
+--print('forcemag', forcemag)
+				local force = delta * forcemag
+--print('force', force)
+				oi.force = oi.force - force - (oi.vel - avgVel) * springVelDamping
+				oj.force = oj.force + force - (oj.vel - avgVel) * springVelDamping
+				oi.springPotEnergy = oi.springPotEnergy - .5 * springForceConst * offsetFromRest * offsetFromRest
+				oj.springPotEnergy = oj.springPotEnergy - .5 * springForceConst * offsetFromRest * offsetFromRest
+			end
+		end
 		-- per-object forces
 		for i,o in ipairs(self.objs) do
 			-- hard constraints?
 			if o.pos:length() > outerWallRadius then
-				o.pos = o.pos * (outerWallRadius / o.pos:length())
-				o.vel = o.vel * (-outerWallRestitution) 
+				local normal = -o.pos:normalize()
+				o.pos = normal * -outerWallRadius
+				o.vel = o.vel - normal * (o.vel:dot(normal) * (1 + outerWallRestitution)) 
 			end
 		end
 		self.totalKineticEnergy = 0
-		self.totalPotentialEnergy = 0
+		self.totalGravPotEnergy = 0
+		self.totalSpringPotEnergy = 0
 		for i,o in ipairs(self.objs) do
 			o.pos = o.pos + o.vel * dt
 			o.vel = o.vel + o.force * (dt / o:mass())
+			o.vel = o.vel * velDecay
 			local kineticEnergy = .5 * o.vel:lenSq() * o:mass()		-- kg m^2 / s^2
 			self.totalKineticEnergy = self.totalKineticEnergy + kineticEnergy 
-			self.totalPotentialEnergy = self.totalPotentialEnergy + o.gravPotEnergy
+			self.totalGravPotEnergy = self.totalGravPotEnergy + o.gravPotEnergy
+			self.totalSpringPotEnergy = self.totalSpringPotEnergy + o.springPotEnergy
 		end
+		if self.running == 'once' then self.running = false end
 	end
 
 	-- render
+	gl.glColor3f(1,1,1)
 	gl.glBegin(gl.GL_QUADS)
 	for i,o in ipairs(self.objs) do
 		local fwd = vec2f(math.cos(o.angle), math.sin(o.angle))
@@ -211,6 +273,14 @@ function App:update(...)
 		for _,corner in ipairs(quadvtxs) do
 			gl.glVertex2f((o.pos + (fwd * corner.x + up * corner.y) * o.scale):unpack())
 		end
+	end
+	gl.glEnd()
+
+	gl.glColor3f(1,1,0)
+	gl.glBegin(gl.GL_LINES)
+	for _,s in pairs(self.springs) do
+		gl.glVertex2f(s[1].pos:unpack())
+		gl.glVertex2f(s[2].pos:unpack())
 	end
 	gl.glEnd()
 
@@ -222,6 +292,8 @@ function App:event(event, ...)
 	if event.type == sdl.SDL_KEYDOWN then
 		if event.key.keysym.sym == ('r'):byte() then
 			self:reset()
+		elseif event.key.keysym.sym == ('u'):byte() then
+			self.running = 'once'
 		elseif event.key.keysym.sym == (' '):byte() then
 			self.running = not self.running
 		end
@@ -229,21 +301,55 @@ function App:event(event, ...)
 end
 
 function App:updateGUI()
+	
+	if self.running then
+		if ig.igButton'Stop' then
+			self.running = false
+		end
+	else
+		if ig.igButton'Start' then
+			self.running = true
+		end
+	end
+	ig.igSameLine()
+	if ig.igButton'Step' then
+		self.running = 'once'
+	end
+	
 	ig.luatableInputInt('count', _G, 'count')
-	ig.luatableInputFloat('dt', _G, 'dt')
+	
+	ig.luatableInputFloatAsText('initRadius', _G, 'initRadius')
+	ig.luatableInputFloatAsText('initVelScale', _G, 'initVelScale')
+
+	ig.luatableInputFloatAsText('dt', _G, 'dt')
+	
 	ig.luatableCheckbox('gravForceEnabled', _G, 'gravForceEnabled')
-	ig.luatableInputFloat('gravForceConst', _G, 'gravForceConst')
+	ig.luatableInputFloatAsText('gravForceConst', _G, 'gravForceConst')
+	
 	ig.luatableCheckbox('doubleCurlForceEnabled', _G, 'doubleCurlForceEnabled')
-	ig.luatableInputFloat('doubleCurlForceConst', _G, 'doubleCurlForceConst')
+	ig.luatableInputFloatAsText('doubleCurlForceConst', _G, 'doubleCurlForceConst')
+	
 	ig.luatableCheckbox('tripleCurlForceEnabled', _G, 'tripleCurlForceEnabled')
-	ig.luatableInputFloat('tripleCurlForceConst', _G, 'tripleCurlForceConst')
-	ig.luatableInputFloat('outerWallRadius', _G, 'outerWallRadius') 
-	ig.luatableInputFloat('outerWallRestitution', _G, 'outerWallRestitution') 
-	ig.luatableInputFloat('znear', self.view, 'znear')
-	ig.luatableInputFloat('zfar', self.view, 'zfar')
+	ig.luatableInputFloatAsText('tripleCurlForceConst', _G, 'tripleCurlForceConst')
+
+	ig.luatableCheckbox('springsEnabled', _G, 'springsEnabled')
+	ig.luatableInputFloatAsText('springStickDistance', _G, 'springStickDistance')
+	ig.luatableInputFloatAsText('springRestLength', _G, 'springRestLength')
+	ig.luatableInputFloatAsText('springBreakDistance', _G, 'springBreakDistance')
+	ig.luatableInputFloatAsText('springForceConst', _G, 'springForceConst')
+	ig.luatableInputFloatAsText('springVelDamping', _G, 'springVelDamping')
+
+	ig.luatableInputFloatAsText('outerWallRadius', _G, 'outerWallRadius') 
+	ig.luatableInputFloatAsText('outerWallRestitution', _G, 'outerWallRestitution') 
+	
+	ig.luatableInputFloatAsText('velDecay', _G, 'velDecay')
+
+	ig.luatableInputFloatAsText('znear', self.view, 'znear')
+	ig.luatableInputFloatAsText('zfar', self.view, 'zfar')
 	ig.igText('total kin. energy '..self.totalKineticEnergy)
-	ig.igText('total grav. pot. energy '..self.totalPotentialEnergy)
-	ig.igText('total energy '..(self.totalKineticEnergy + self.totalPotentialEnergy))
+	ig.igText('total grav. pot. energy '..self.totalGravPotEnergy)
+	ig.igText('total spring pot. energy '..self.totalSpringPotEnergy)
+	ig.igText('total energy '..(self.totalKineticEnergy + self.totalGravPotEnergy + self.totalSpringPotEnergy))
 end
 
 App():run()
