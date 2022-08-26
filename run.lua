@@ -5,15 +5,15 @@ local sdl = require 'ffi.sdl'
 local ig = require 'imgui'
 local vec2f = require 'vec-ffi.vec2f'
 
-_G.count = 50
+_G.count = 150
 _G.initRadius = 70
-_G.initVelScale = .001
+_G.initVelScale = .0001
 
 _G.dt = 1
 
 -- ye ol classic
 _G.gravForceEnabled = true
-_G.gravForceConst = .001	-- units: m^3 / (kg s^2)
+_G.gravForceConst = .01		-- units: m^3 / (kg s^2)
 
 -- dumb
 _G.doubleCurlForceEnabled = false
@@ -24,11 +24,12 @@ _G.tripleCurlForceEnabled = false
 _G.tripleCurlForceConst = .000001
 
 _G.springsEnabled = true
+_G.springsForceNearConstraint = true
 _G.springStickDistance = 5
 _G.springRestLength = 5
 _G.springBreakDistance = 2
 _G.springForceConst = 3e-3
-_G.springVelDamping = 1e-2
+_G.springVelDamping = 1e-1
 
 -- meh useful
 _G.outerWallRadius = 150
@@ -226,20 +227,28 @@ function App:update(...)
 				local delta = oj.pos - oi.pos
 				local len = delta:length()
 				local avgVel = (oi.vel + oj.vel) * .5
---print('len', len)
---print('springRestLength', springRestLength)
 				local offsetFromRest = springRestLength - len
---print('offsetFromRest', offsetFromRest)
+				-- [[ force-based
 				local forcemag = springForceConst * offsetFromRest / len
---print('forcemag', forcemag)
 				local force = delta * forcemag
---print('force', force)
-				oi.force = oi.force - force - (oi.vel - avgVel) * springVelDamping
-				oj.force = oj.force + force - (oj.vel - avgVel) * springVelDamping
+				oi.force = oi.force - force
+				oj.force = oj.force + force
+				--]]
+				-- [[ constraint-based
+				if springsForceNearConstraint and offsetFromRest > 0 then
+					local unitDelta = delta / len
+					local avgPos = (oi.pos + oj.pos) * .5
+					oi.pos = avgPos - unitDelta * .5 * springRestLength
+					oj.pos = avgPos + unitDelta * .5 * springRestLength
+				end
+				--]]
+				oi.force = oi.force - (oi.vel - avgVel) * springVelDamping
+				oj.force = oj.force - (oj.vel - avgVel) * springVelDamping
 				oi.springPotEnergy = oi.springPotEnergy - .5 * springForceConst * offsetFromRest * offsetFromRest
 				oj.springPotEnergy = oj.springPotEnergy - .5 * springForceConst * offsetFromRest * offsetFromRest
 			end
 		end
+
 		-- per-object forces
 		for i,o in ipairs(self.objs) do
 			-- hard constraints?
@@ -333,6 +342,7 @@ function App:updateGUI()
 	ig.luatableInputFloatAsText('tripleCurlForceConst', _G, 'tripleCurlForceConst')
 
 	ig.luatableCheckbox('springsEnabled', _G, 'springsEnabled')
+	ig.luatableCheckbox('springsForceNearConstraint', _G, 'springsForceNearConstraint')
 	ig.luatableInputFloatAsText('springStickDistance', _G, 'springStickDistance')
 	ig.luatableInputFloatAsText('springRestLength', _G, 'springRestLength')
 	ig.luatableInputFloatAsText('springBreakDistance', _G, 'springBreakDistance')
