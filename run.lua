@@ -66,6 +66,17 @@ function App:update(...)
 	for i,obj in ipairs(self.objs) do
 		obj.force = vec2f(0,0)
 	end
+	-- object-object-object forces
+	for i=1,#self.objs-2 do
+		local oi = self.objs[i]
+		for j=i+1,#self.objs-1 do
+			local oj = self.objs[j]
+			for k=j+1,#self.objs do
+				local ok = self.objs[k]
+				-- determine axis of rotation between the three
+			end
+		end
+	end
 	-- object-object forces
 	for i=1,#self.objs-1 do
 		local oi = self.objs[i]
@@ -75,7 +86,8 @@ function App:update(...)
 			local len = delta:length()
 			-- self.gravitation
 			if len > oi.scale + oj.scale then
-				local force = delta * (1 / (len * len * len))
+				local forcemag = 4 * (oi.scale * oi.scale + oj.scale * oj.scale) / (len * len * len)
+				local force = delta * forcemag
 				oi.force = oi.force + force
 				oj.force = oj.force - force
 			end
@@ -91,7 +103,7 @@ function App:update(...)
 	end
 	for i,obj in ipairs(self.objs) do
 		obj.pos = obj.pos + obj.vel * dt
-		obj.vel = obj.vel + obj.force * dt
+		obj.vel = obj.vel + obj.force * (dt / (4 * obj.scale * obj.scale))
 	end
 
 	-- render
