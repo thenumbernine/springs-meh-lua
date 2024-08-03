@@ -3,6 +3,7 @@ local class = require 'ext.class'
 local table = require 'ext.table'
 local sdl = require 'ffi.sdl'
 local ig = require 'imgui'
+local gl = require 'gl'
 local vec2f = require 'vec-ffi.vec2f'
 
 _G.count = 150
@@ -132,7 +133,6 @@ local quadvtxs = table{
 }
 
 function App:update(...)
-	local gl = self.gl
 	self.view:setup(self.width / self.height)
 
 	gl.glClear(gl.GL_COLOR_BUFFER_BIT)
