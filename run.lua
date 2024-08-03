@@ -96,8 +96,8 @@ end
 
 local App = require 'imguiapp.withorbit'()
 
-function App:initGL(...)
-	App.super.initGL(self, ...)
+function App:initGL()
+	App.super.initGL(self)
 
 	self.view.ortho = true
 	self.view.orthoSize = 100
@@ -296,20 +296,31 @@ function App:update(...)
 	App.super.super.update(self, ...)
 end
 
-function App:event(event, ...)
-	App.super.event(self, event, ...)
-	if event.type == sdl.SDL_KEYDOWN then
-		if event.key.keysym.sym == ('r'):byte() then
+function App:event(event)
+	App.super.event(self, event)
+	if event[0].type == sdl.SDL_KEYDOWN then
+		if event[0].key.keysym.sym == ('r'):byte() then
 			self:reset()
-		elseif event.key.keysym.sym == ('u'):byte() then
+		elseif event[0].key.keysym.sym == ('u'):byte() then
 			self.running = 'once'
-		elseif event.key.keysym.sym == (' '):byte() then
+		elseif event[0].key.keysym.sym == (' '):byte() then
 			self.running = not self.running
 		end
 	end	
 end
 
 function App:updateGUI()
+	local thisTime = os.time()
+	if thisTime ~= self.lastTime then
+		if self.lastTime then
+			self.fps = self.fpscounter / (thisTime - self.lastTime)
+		end
+		self.fpscounter = 0
+		self.lastTime = thisTime
+	end
+	self.fpscounter = (self.fpscounter or 0) + 1
+
+	ig.igText('fps: '..(self.fps or ''))
 	
 	if self.running then
 		if ig.igButton'Stop' then
