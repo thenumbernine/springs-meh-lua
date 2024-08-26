@@ -96,7 +96,7 @@ end
 
 
 local App = require 'imguiapp.withorbit'()
-
+App.viewUseGLMatrixMode = true
 function App:initGL()
 	App.super.initGL(self)
 
